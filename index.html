@@ -124,6 +124,66 @@
     .tab { display: none; }
     .tab.active { display: block; }
 
+    /* ===== Backup styles ===== */
+    .backup-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .backup-card-header {
+      background: #f8fafc;
+      padding: 12px 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .backup-card-header:hover {
+      background: #eef2f7;
+    }
+    .backup-date {
+      font-weight: 600;
+      font-size: 1.1rem;
+    }
+    .backup-summary {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .backup-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .backup-actions button {
+      padding: 6px 12px;
+      font-size: 0.85rem;
+    }
+    .backup-card-body {
+      padding: 15px;
+      display: none;
+    }
+    .backup-card-body.show {
+      display: block;
+    }
+    .diff-item {
+      padding: 8px;
+      margin: 4px 0;
+      background: #f8fafc;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+    .diff-added {
+      border-left: 3px solid #22c55e;
+    }
+    .diff-deleted {
+      border-left: 3px solid #ef4444;
+    }
+    .diff-modified {
+      border-left: 3px solid #f59e0b;
+    }
+
     /* ===== Common cards ===== */
     .card { background: white; border-radius: var(--radius); padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 16px; }
     .card-title { font-size: 0.72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; }
@@ -268,10 +328,10 @@
       .card { box-shadow: none; border: 1px solid #ccc; }
     }
   </style>
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js"></script>
+  <!-- Firebase SDK (compat版 - HTML直接読み込み対応) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 </head>
 <body>
 
@@ -387,6 +447,7 @@
     <button class="active" onclick="showATab('kintai')">勤怠確認</button>
     <button onclick="showATab('approval')" id="anav-approval">承認</button>
     <button onclick="showATab('emps')">従業員管理</button>
+    <button onclick="showATab('backup')">バックアップ</button>
     <button onclick="showATab('settings')">設定</button>
   </nav>
 
@@ -634,6 +695,27 @@
         </div>
         <div id="payroll-msg" style="font-size:0.8rem;color:var(--muted);margin-top:8px"></div>
         <div id="gas-sync-status" style="font-size:0.8rem;color:var(--muted);margin-top:8px"></div>
+      </div>
+    </div>
+
+    <!-- ===== バックアップ管理 ===== -->
+    <div id="atab-backup" class="tab">
+      <div class="card">
+        <div class="section-header">
+          <div class="section-title">📅 バックアップ管理</div>
+        </div>
+
+        <div style="margin-bottom:20px;padding:15px;background:#f0f7ff;border-radius:8px;border-left:4px solid #2563eb">
+          <strong>💾 自動バックアップシステム</strong><br>
+          <small>毎日00:00に自動でバックアップを作成します。90日間保持されます。</small><br><br>
+          <button class="btn btn-primary" onclick="exportAllBackupsAsJSON()">
+            📥 すべてのバックアップをダウンロード
+          </button>
+        </div>
+
+        <div id="backup-list" style="overflow-x:auto;">
+          <!-- ここに動的にバックアップ一覧を表示 -->
+        </div>
       </div>
     </div>
 
@@ -1136,23 +1218,64 @@
 
 <script>
 // ==================== FIREBASE INIT ====================
-const firebaseConfig = {
-  apiKey: "AIzaSyAUJ4Cbsr6vl8cfytgQRe6nuQuWfn0yna4",
-  authDomain: "kintai-rooute.firebaseapp.com",
-  projectId: "kintai-rooute",
-  storageBucket: "kintai-rooute.firebasestorage.app",
-  messagingSenderId: "543516595286",
-  appId: "1:543516595286:web:653fcee1416ee74be097f7",
-  measurementId: "G-7SBNPRB53S"
-};
+let firebaseInitialized = false;
+let db = null;
 
-try {
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.firestore();
-  console.log('✅ Firebase initialized');
-} catch(e) {
-  console.warn('Firebase init warning:', e);
+function initializeFirebase() {
+  try {
+    if (typeof firebase === 'undefined') {
+      console.error('❌ Firebase SDKが読み込まれていません。スクリプトタグを確認してください。');
+      return false;
+    }
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAUJ4Cbsr6vl8cfytgQRe6nuQuWfn0yna4",
+      authDomain: "kintai-rooute.firebaseapp.com",
+      projectId: "kintai-rooute",
+      storageBucket: "kintai-rooute.firebasestorage.app",
+      messagingSenderId: "543516595286",
+      appId: "1:543516595286:web:653fcee1416ee74be097f7",
+      measurementId: "G-7SBNPRB53S"
+    };
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    db = firebase.firestore();
+    firebaseInitialized = true;
+    console.log('✅ Firebase initialized successfully');
+    return true;
+  } catch(e) {
+    console.error('❌ Firebase initialization error:', e.message);
+    return false;
+  }
 }
+
+// ページ読み込み時に初期化
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('🔄 Firebase を初期化中...');
+  initializeFirebase();
+
+  // Firebase初期化完了後、定期的にFirestoreと同期
+  setTimeout(() => {
+    if (firebaseInitialized) {
+      console.log('📡 定期同期タイマー開始（30秒ごと）');
+      // 30秒ごとにFirestoreからデータを自動同期（ブラウザキャッシュクリア時の復旧対策）
+      setInterval(() => {
+        console.log('🔄 定期同期実行中...');
+        syncFromServer();
+      }, 30000);
+    }
+  }, 2000);
+
+  // バックアップスケジューラーを開始
+  setTimeout(() => {
+    if (firebaseInitialized && db) {
+      console.log('📅 バックアップスケジューラー開始');
+      initDailyBackupScheduler();
+    }
+  }, 3000);
+});
 
 // ==================== JAPAN HOLIDAYS ====================
 function getJpHoliday(dateStr) {
@@ -1281,15 +1404,15 @@ function getDailyShiftStatus(empId, dateStr) {
 // ==================== INDEXED DB (RECEIPT FILES) ====================
 const DB_NAME = 'kt_receipts_db';
 const STORE_NAME = 'receipts';
-let db = null;
+let idbDatabase = null;
 
 async function initReceiptDB() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
-      db = request.result;
-      resolve(db);
+      idbDatabase = request.result;
+      resolve(idbDatabase);
     };
     request.onupgradeneeded = (e) => {
       const database = e.target.result;
@@ -1301,11 +1424,11 @@ async function initReceiptDB() {
 }
 
 async function saveReceiptFile(id, file, expenseId) {
-  if (!db) await initReceiptDB();
+  if (!idbDatabase) await initReceiptDB();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const tx = idbDatabase.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       store.put({
         id,
@@ -1325,9 +1448,9 @@ async function saveReceiptFile(id, file, expenseId) {
 }
 
 async function getReceiptFile(id) {
-  if (!db) await initReceiptDB();
+  if (!idbDatabase) await initReceiptDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const tx = idbDatabase.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(id);
     request.onsuccess = () => resolve(request.result);
@@ -1336,9 +1459,9 @@ async function getReceiptFile(id) {
 }
 
 async function getReceiptsByExpenseId(expenseId) {
-  if (!db) await initReceiptDB();
+  if (!idbDatabase) await initReceiptDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const tx = idbDatabase.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const request = store.getAll();
     request.onsuccess = () => {
@@ -1350,9 +1473,9 @@ async function getReceiptsByExpenseId(expenseId) {
 }
 
 async function deleteReceiptFile(id) {
-  if (!db) await initReceiptDB();
+  if (!idbDatabase) await initReceiptDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const tx = idbDatabase.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     store.delete(id);
     tx.oncomplete = () => resolve();
@@ -1450,7 +1573,7 @@ function exitAdmin() {
 }
 
 // ==================== ADMIN TABS ====================
-const ATABS = ['kintai','approval','emps','settings'];
+const ATABS = ['kintai','approval','emps','backup','settings'];
 function showATab(name) {
   ATABS.forEach((t,i) => {
     document.getElementById('atab-'+t).classList.toggle('active', t===name);
@@ -1459,6 +1582,7 @@ function showATab(name) {
   if (name==='kintai')   renderKintai();
   if (name==='approval') { appFilter='pending'; document.querySelectorAll('.filter-tab').forEach((b,i)=>b.classList.toggle('active',i===0)); renderMonthlyConfs(); renderApproval().catch(e=>console.warn('Approval render error:',e)); }
   if (name==='emps')     renderEmps();
+  if (name==='backup')   renderBackupManagement();
   if (name==='settings') renderSettings();
 }
 
@@ -3506,9 +3630,18 @@ async function syncToGas() {
 }
 
 async function autoSyncToGas() {
-  // Firebase version: sync to Firestore instead of GAS
+  // Firebase版: Firestoreに同期
   try {
-    const db = firebase.firestore();
+    if (!firebaseInitialized) {
+      console.warn('⚠️ Firebase未初期化:', typeof firebase === 'undefined' ? 'SDK未読み込み' : 'initializeFirebaseが呼ばれていない');
+      return;
+    }
+
+    if (!db) {
+      console.warn('⚠️ Firestore dbが初期化されていません (idbDatabaseとの衝突の可能性を修正しました)');
+      return;
+    }
+
     const payload = {
       employees:        loadEmps(),
       records:          loadRecs(),
@@ -3519,11 +3652,343 @@ async function autoSyncToGas() {
       updatedAt: new Date().toISOString()
     };
 
+    console.log('📤 Firestore同期実行中...', {
+      employees: payload.employees.length,
+      records: payload.records.length,
+      declarations: payload.shift_declarations.length
+    });
+
     await db.collection('_app_data').doc('latest').set(payload);
-    setGasSyncStatus('✅ ' + new Date().toLocaleTimeString('ja-JP') + ' Firestore同期', false);
+    setGasSyncStatus('✅ ' + new Date().toLocaleTimeString('ja-JP') + ' Firestore同期成功', false);
+    console.log('✅ Firestore同期成功:', new Date().toLocaleTimeString('ja-JP'));
   } catch(e) {
-    console.error('Firestore sync error:', e);
-    setGasSyncStatus('⚠ Firestore同期失敗', true);
+    console.error('❌ Firestore同期エラー:', {
+      message: e.message,
+      code: e.code,
+      name: e.name,
+      fullError: e
+    });
+    setGasSyncStatus('⚠ Firestore同期失敗: ' + e.code, true);
+  }
+}
+
+// ==================== BACKUP SYSTEM ====================
+
+const BACKUP_RETENTION_DAYS = 90;  // 90日間保持
+
+// 毎日00:00に自動実行
+async function createDailyBackup() {
+  try {
+    const today = todayStr();
+    if (localStorage.getItem('backup_date_' + today)) {
+      console.log('💾 本日のバックアップは既に完了:', today);
+      return;
+    }
+
+    const backup = {
+      date: today,
+      timestamp: new Date().toISOString(),
+      employees: loadEmps(),
+      records: loadRecs(),
+      applications: loadApps(),
+      monthly_confs: loadConfs(),
+      shift_defaults: loadShiftDefaults(),
+      shift_declarations: loadShiftDeclarations(),
+      recordCount: loadRecs().length,
+      employeeCount: loadEmps().length,
+      version: 2
+    };
+
+    await db.collection('_app_backups').doc(today).set(backup);
+    localStorage.setItem('backup_date_' + today, new Date().toISOString());
+    console.log('✅ 日次バックアップ作成成功:', today, {
+      employees: backup.employeeCount,
+      records: backup.recordCount
+    });
+    await cleanOldBackups();
+  } catch(e) {
+    console.error('❌ バックアップ作成エラー:', e.message);
+  }
+}
+
+function initDailyBackupScheduler() {
+  const checkAndCreateBackup = () => {
+    const lastBackupDate = localStorage.getItem('last_backup_execution_date');
+    const today = todayStr();
+    if (lastBackupDate !== today && firebaseInitialized && db) {
+      createDailyBackup();
+      localStorage.setItem('last_backup_execution_date', today);
+    }
+  };
+  checkAndCreateBackup();
+  setInterval(checkAndCreateBackup, 60 * 60 * 1000);
+}
+
+async function cleanOldBackups() {
+  try {
+    const today = new Date();
+    const cutoffDate = new Date(today.getTime() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const cutoffDateStr = cutoffDate.getFullYear() + '-' + pad2(cutoffDate.getMonth() + 1) + '-' + pad2(cutoffDate.getDate());
+    const backups = await db.collection('_app_backups').get();
+    let deletedCount = 0;
+    for (const doc of backups.docs) {
+      if (doc.id < cutoffDateStr) {
+        await db.collection('_app_backups').doc(doc.id).delete();
+        deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`🗑️ 古いバックアップを削除: ${deletedCount}件`);
+    }
+  } catch(e) {
+    console.error('⚠️ 古いバックアップ削除エラー:', e.message);
+  }
+}
+
+async function getBackupList() {
+  try {
+    const backups = await db.collection('_app_backups').orderBy('date', 'desc').get();
+    return backups.docs.map(doc => ({ date: doc.id, ...doc.data() }));
+  } catch(e) {
+    console.error('❌ バックアップ一覧取得エラー:', e.message);
+    return [];
+  }
+}
+
+async function restoreBackup(date) {
+  try {
+    console.log('🔄 バックアップ復元開始:', date);
+    const docSnap = await db.collection('_app_backups').doc(date).get();
+    if (!docSnap.exists) {
+      alert('❌ バックアップが見つかりません: ' + date);
+      return false;
+    }
+    const backup = docSnap.data();
+    localStorage.setItem(EMP_KEY, JSON.stringify(backup.employees));
+    localStorage.setItem(REC_KEY, JSON.stringify(backup.records));
+    localStorage.setItem(APP_KEY, JSON.stringify(backup.applications));
+    localStorage.setItem(MCONF_KEY, JSON.stringify(backup.monthly_confs));
+    localStorage.setItem(SHIFT_DEFAULT_KEY, JSON.stringify(backup.shift_defaults));
+    localStorage.setItem(SHIFT_DECLARE_KEY, JSON.stringify(backup.shift_declarations));
+    const restoreRecord = { ...backup, restoredFrom: date, restoredAt: new Date().toISOString() };
+    await db.collection('_app_data').doc('latest').set(restoreRecord);
+    console.log('✅ 復元完了:', date);
+    alert('✅ ' + date + ' のバックアップから復元しました');
+    refreshUIAfterSync();
+    return true;
+  } catch(e) {
+    console.error('❌ 復元エラー:', e.message);
+    alert('❌ 復元に失敗しました: ' + e.message);
+    return false;
+  }
+}
+
+function calculateBackupDifference(backup1, backup2) {
+  const diff = {
+    employees: { added: [], deleted: [], modified: [] },
+    records: { added: 0, deleted: 0 },
+    applications: { added: 0, deleted: 0 },
+    summaryText: ''
+  };
+
+  const emp1Map = new Map(backup1.employees.map(e => [e.id, e]));
+  const emp2Map = new Map(backup2.employees.map(e => [e.id, e]));
+
+  backup2.employees.forEach(emp2 => {
+    const emp1 = emp1Map.get(emp2.id);
+    if (!emp1) {
+      diff.employees.added.push(emp2);
+    } else if (JSON.stringify(emp1) !== JSON.stringify(emp2)) {
+      diff.employees.modified.push({ from: emp1, to: emp2 });
+    }
+  });
+
+  backup1.employees.forEach(emp1 => {
+    if (!emp2Map.has(emp1.id)) {
+      diff.employees.deleted.push(emp1);
+    }
+  });
+
+  const rec1Count = backup1.records?.length || 0;
+  const rec2Count = backup2.records?.length || 0;
+  diff.records.added = rec2Count > rec1Count ? rec2Count - rec1Count : 0;
+  diff.records.deleted = rec1Count > rec2Count ? rec1Count - rec2Count : 0;
+
+  const app1Count = backup1.applications?.length || 0;
+  const app2Count = backup2.applications?.length || 0;
+  diff.applications.added = app2Count > app1Count ? app2Count - app1Count : 0;
+  diff.applications.deleted = app1Count > app2Count ? app1Count - app2Count : 0;
+
+  const summaries = [];
+  if (diff.employees.added.length > 0) summaries.push(`従業員追加: ${diff.employees.added.length}人`);
+  if (diff.employees.deleted.length > 0) summaries.push(`従業員削除: ${diff.employees.deleted.length}人`);
+  if (diff.employees.modified.length > 0) summaries.push(`従業員変更: ${diff.employees.modified.length}人`);
+  if (diff.records.added > 0) summaries.push(`打刻記録追加: ${diff.records.added}件`);
+  if (diff.records.deleted > 0) summaries.push(`打刻記録削除: ${diff.records.deleted}件`);
+  if (diff.applications.added > 0) summaries.push(`申請追加: ${diff.applications.added}件`);
+  diff.summaryText = summaries.length > 0 ? summaries.join(', ') : '変更なし';
+
+  return diff;
+}
+
+function exportBackupAsJSON(date, backup) {
+  try {
+    const dataStr = JSON.stringify(backup, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `backup_${date}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    console.log('✅ バックアップをエクスポート:', `backup_${date}.json`);
+  } catch(e) {
+    console.error('❌ エクスポートエラー:', e.message);
+    alert('❌ エクスポートに失敗しました');
+  }
+}
+
+async function exportAllBackupsAsJSON() {
+  try {
+    const backups = await getBackupList();
+    if (backups.length === 0) {
+      alert('❌ バックアップが見つかりません');
+      return;
+    }
+    const allBackups = {
+      exportDate: new Date().toISOString(),
+      backupCount: backups.length,
+      backups: backups
+    };
+    const dataStr = JSON.stringify(allBackups, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `all_backups_${todayStr()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    alert(`✅ ${backups.length}個のバックアップをエクスポートしました`);
+    console.log('✅ 全バックアップをエクスポート');
+  } catch(e) {
+    console.error('❌ 一括エクスポートエラー:', e.message);
+    alert('❌ エクスポートに失敗しました');
+  }
+}
+
+async function renderBackupManagement() {
+  const el = document.getElementById('backup-list');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:20px">⏳ 読み込み中...</div>';
+  try {
+    const backups = await getBackupList();
+    if (backups.length === 0) {
+      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">バックアップがまだ作成されていません</div>';
+      return;
+    }
+
+    let html = '';
+    for (let i = 0; i < backups.length; i++) {
+      const backup = backups[i];
+      const prevBackup = i < backups.length - 1 ? backups[i + 1] : null;
+      const diff = prevBackup ? calculateBackupDifference(prevBackup, backup) : null;
+
+      html += `
+        <div class="backup-card">
+          <div class="backup-card-header" onclick="toggleBackupDetail('backup-${backup.date}')">
+            <div>
+              <div class="backup-date">📅 ${backup.date}</div>
+              <div class="backup-summary">${backup.employeeCount || 0} 従業員 | ${backup.recordCount || 0} 打刻記録</div>
+              ${diff ? `<div style="color:#6b7280;font-size:0.85rem;margin-top:6px">${diff.summaryText}</div>` : ''}
+            </div>
+            <div style="display:flex;gap:8px">
+              <span id="backup-toggle-${backup.date}" style="color:var(--muted)">▼</span>
+            </div>
+          </div>
+
+          <div id="backup-${backup.date}" class="backup-card-body">
+            <div style="margin-bottom:15px;padding:12px;background:#f0f7ff;border-radius:4px">
+              <strong>🕐 バックアップ作成日時:</strong> ${new Date(backup.timestamp).toLocaleString('ja-JP')}<br>
+              <strong>👥 従業員:</strong> ${backup.employeeCount || 0}人<br>
+              <strong>⏱️ 打刻記録:</strong> ${backup.recordCount || 0}件
+            </div>
+
+            ${diff ? `
+              <div style="margin-bottom:15px">
+                <strong>📊 前日比変更内容:</strong>
+                <div style="margin-top:8px">
+                  ${diff.employees.added.length > 0 ? `
+                    <div class="diff-item diff-added">
+                      ✅ 従業員追加: ${diff.employees.added.map(e => e.name).join(', ')}
+                    </div>
+                  ` : ''}
+                  ${diff.employees.deleted.length > 0 ? `
+                    <div class="diff-item diff-deleted">
+                      ❌ 従業員削除: ${diff.employees.deleted.map(e => e.name).join(', ')}
+                    </div>
+                  ` : ''}
+                  ${diff.employees.modified.length > 0 ? `
+                    <div class="diff-item diff-modified">
+                      ✏️ 従業員変更: ${diff.employees.modified.length}人
+                    </div>
+                  ` : ''}
+                  ${diff.records.added > 0 ? `
+                    <div class="diff-item diff-added">
+                      ✅ 打刻記録追加: ${diff.records.added}件
+                    </div>
+                  ` : ''}
+                  ${diff.records.deleted > 0 ? `
+                    <div class="diff-item diff-deleted">
+                      ❌ 打刻記録削除: ${diff.records.deleted}件
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            ` : ''}
+
+            <div class="backup-actions">
+              <button class="btn btn-success btn-sm" onclick="restoreBackup('${backup.date}')">
+                ⬅️ 復元
+              </button>
+              <button class="btn btn-info btn-sm" onclick="exportBackupAsJSON('${backup.date}', JSON.parse(JSON.stringify(${JSON.stringify(backup)})))">
+                📥 ダウンロード
+              </button>
+              <button class="btn btn-danger btn-sm" onclick="deleteBackup('${backup.date}')">
+                🗑️ 削除
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = `<div style="color:red;padding:20px">❌ エラー: ${e.message}</div>`;
+  }
+}
+
+function toggleBackupDetail(id) {
+  const el = document.getElementById(id);
+  const toggle = document.getElementById('backup-toggle-' + id.replace('backup-', ''));
+  if (el) {
+    el.classList.toggle('show');
+    if (toggle) toggle.textContent = el.classList.contains('show') ? '▲' : '▼';
+  }
+}
+
+async function deleteBackup(date) {
+  if (!confirm(`${date} のバックアップを削除してもよろしいですか？`)) return;
+  try {
+    await db.collection('_app_backups').doc(date).delete();
+    console.log('✅ バックアップ削除:', date);
+    renderBackupManagement();
+  } catch(e) {
+    console.error('❌ 削除エラー:', e.message);
+    alert('❌ 削除に失敗しました');
   }
 }
 
@@ -3898,6 +4363,128 @@ function buildShiftComparisonView(empId, year, month) {
   return html;
 }
 
+// ==================== SERVER SYNC (PULL) ====================
+async function syncFromServer() {
+  try {
+    // Firebase版の場合
+    if (typeof firebase !== 'undefined' && firebase.firestore) {
+      console.log('🔍 Firebase初期化確認中...');
+      console.log('   firebaseInitialized:', firebaseInitialized);
+      console.log('   firebase.apps.length:', firebase.apps.length);
+
+      // グローバルdbを使用（idbDatabaseの衝突を避けるため）
+      if (!firebaseInitialized || !db) {
+        console.error('❌ Firebaseまたはdbが初期化されていません');
+        console.log('   firebaseInitialized:', firebaseInitialized);
+        console.log('   db:', db);
+        return false;
+      }
+
+      console.log('✅ Firestoreに接続');
+
+      console.log('📥 _app_data/latest を取得中...');
+      const docSnap = await db.collection('_app_data').doc('latest').get();
+
+      if (docSnap.exists) {
+        console.log('✅ データドキュメント発見');
+        const data = docSnap.data();
+
+        // localStorageを最新データで更新
+        if (data.employees) localStorage.setItem(EMP_KEY, JSON.stringify(data.employees));
+        if (data.records) localStorage.setItem(REC_KEY, JSON.stringify(data.records));
+        if (data.applications) localStorage.setItem(APP_KEY, JSON.stringify(data.applications));
+        if (data.monthly_confs) localStorage.setItem(MCONF_KEY, JSON.stringify(data.monthly_confs));
+        if (data.shift_defaults) localStorage.setItem(SHIFT_DEFAULT_KEY, JSON.stringify(data.shift_defaults));
+        if (data.shift_declarations) localStorage.setItem(SHIFT_DECLARE_KEY, JSON.stringify(data.shift_declarations));
+
+        console.log('✅ Firebaseから同期完了');
+        console.log('📊 同期データ:', {
+          従業員数: data.employees?.length || 0,
+          打刻記録数: data.records?.length || 0,
+          申請数: data.applications?.length || 0,
+          シフト申告数: data.shift_declarations?.length || 0
+        });
+
+        // UI更新
+        refreshUIAfterSync();
+        return true;
+      } else {
+        console.warn('⚠️ _app_data/latest ドキュメントが見つかりません');
+        console.log('💡 初回は管理者画面で従業員情報を保存してください');
+        return false;
+      }
+    }
+    // GAS版の場合
+    else {
+      const url = getGasUrl();
+      if (!url) {
+        console.log('ℹ GAS URLが設定されていません');
+        return false;
+      }
+
+      // GASからデータを取得（action=get を追加してください）
+      const response = await fetch(url + '?action=get', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (!response.ok) {
+        console.warn('GAS レスポンスエラー:', response.status);
+        return false;
+      }
+
+      const data = await response.json();
+
+      // localStorageを最新データで更新
+      if (data.employees) localStorage.setItem(EMP_KEY, JSON.stringify(data.employees));
+      if (data.records) localStorage.setItem(REC_KEY, JSON.stringify(data.records));
+      if (data.applications) localStorage.setItem(APP_KEY, JSON.stringify(data.applications));
+      if (data.monthly_confs) localStorage.setItem(MCONF_KEY, JSON.stringify(data.monthly_confs));
+      if (data.shift_defaults) localStorage.setItem(SHIFT_DEFAULT_KEY, JSON.stringify(data.shift_defaults));
+      if (data.shift_declarations) localStorage.setItem(SHIFT_DECLARE_KEY, JSON.stringify(data.shift_declarations));
+
+      console.log('✅ GAS から同期完了');
+
+      // UI更新
+      refreshUIAfterSync();
+      return true;
+    }
+  } catch(e) {
+    console.error('❌ サーバー同期エラー:', e.message);
+    console.error('📍 エラー詳細:', e.code, e);
+
+    // Firebase初期化確認
+    if (typeof firebase === 'undefined') {
+      console.error('❌ Firebase SDKが読み込まれていません');
+    } else if (!firebase.apps.length) {
+      console.error('❌ Firebase が初期化されていません');
+    }
+
+    return false;
+  }
+}
+
+// 同期後にUIを更新
+function refreshUIAfterSync() {
+  const empId = document.getElementById('emp-sel')?.value;
+
+  // 従業員選択肢を再構築
+  if (document.getElementById('emp-sel')) {
+    buildEmpSelect();
+  }
+
+  // 管理画面の表示を更新
+  if (document.getElementById('admin-mode')?.style.display !== 'none') {
+    renderKintai();
+    renderEmps();
+  }
+
+  // 従業員画面の表示を更新
+  if (empId && document.getElementById('employee-mode')?.style.display !== 'none') {
+    onEmpSelChange();
+  }
+}
+
 // ==================== MODAL ====================
 function openModal(id)  { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
@@ -3910,7 +4497,59 @@ document.addEventListener('keydown', e => {
 
 // ==================== INIT ====================
 document.getElementById('emp-date-label').textContent = todayFmt();
-buildEmpSelect();
+
+// Firebase初期化完了を待ってから同期を実行
+async function initApp() {
+  console.log('🚀 アプリ初期化開始...');
+
+  // Firebase初期化を待つ（最大5秒）
+  let attempts = 0;
+  console.log('⏳ Firebase初期化待機中...');
+  while (!firebaseInitialized && attempts < 50) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    attempts++;
+  }
+
+  console.log('初期化状態:', {
+    firebaseInitialized,
+    dbExists: !!db,
+    attempts,
+    firebaseSDKLoaded: typeof firebase !== 'undefined',
+    firebaseAppsLength: firebase?.apps?.length || 0
+  });
+
+  if (!firebaseInitialized) {
+    console.error('❌ Firebase初期化がタイムアウト（5秒以内に完了しませんでした）');
+    console.error('手動でリセット:', { location: window.location.href });
+  } else {
+    console.log('✅ Firebase準備完了、データ同期を開始します');
+  }
+
+  // サーバーから最新データを同期
+  console.log('📥 サーバーから最新データを取得中...');
+  const syncSuccess = await syncFromServer();
+  if (syncSuccess) {
+    console.log('✅ 初期同期成功');
+  } else {
+    console.warn('⚠️ 初期同期失敗（ローカルデータを使用）');
+  }
+  buildEmpSelect();
+}
+
+// ページ読み込み完了時に初期化
+if (document.readyState === 'loading') {
+  window.addEventListener('load', initApp);
+} else {
+  initApp();
+}
+
+// 定期的にFirestoreに同期（10秒ごと）- データ損失防止
+setInterval(() => {
+  if (firebaseInitialized) {
+    autoSyncToGas(); // Firebase版なのでFirestoreに同期
+  }
+}, 10000);
+
 const savedGasUrl = document.getElementById('gas-url-input');
 if (savedGasUrl) savedGasUrl.value = getGasUrl();
 </script>
